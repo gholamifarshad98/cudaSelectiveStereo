@@ -37,10 +37,12 @@ __global__ void saxpy(int n, float a, float *x, float *y, int* q)
 
 __global__ void addIntensity(int n, uchar* pixel) {
 	//std::cout << pixel[blockIdx.x] << std::endl;
-	pixel[blockIdx.x] = pixel[blockIdx.x];
+	int temp =(int) pixel[blockIdx.x];
+	temp = temp + n;
+
+	pixel[blockIdx.x] = (uchar)temp;
 	//std::cout << pixel[blockIdx.x] << std::endl;
-	printf("this threadIdx.x is %d and %d \n", blockIdx.x , (
-		pixel[blockIdx.x]));
+	//printf("this threadIdx.x is %d and %d \n", blockIdx.x , (pixel[blockIdx.x]));
 }
 
 
@@ -164,19 +166,29 @@ int main(void)
 	int temp;
 	for (int i = 0; i < numOfColumns*numOfRows; i++) {
 		imArrary1D[i] = imArray2D[int(i/numOfColumns)][i%numOfColumns];
-		cout << (int)imArray2D[int(i / numOfColumns)][i%numOfColumns] << endl;
+		//cout << (int)imArray2D[int(i / numOfColumns)][i%numOfColumns] << endl;
 	}
 
 
 	uchar* imArray1D_d;
 	cudaMalloc((void**)&imArray1D_d, numOfColumns*numOfRows * sizeof(uchar));
 	cudaMemcpy(imArray1D_d,imArrary1D,numOfColumns*numOfRows*sizeof(uchar), cudaMemcpyHostToDevice);
-	//addIntensity <<<(numOfRows*numOfColumns + 255) / 256, 256 >>>(50, imArray1D_d);
+	addIntensity <<<(numOfRows*numOfColumns ), 1 >>>(190, imArray1D_d);
 	cudaMemcpy(imArrary1D, imArray1D_d, numOfColumns*numOfRows * sizeof(uchar), cudaMemcpyDeviceToHost);
 	cout << "adding to array is done!!!!!!" << endl;
 	for (int i = 0; i < numOfColumns*numOfRows; i++) {
 		imArray2D[int(i / numOfColumns)][i%numOfColumns] = imArrary1D[i];
 	}
+
+	for (int j = 0; j < numOfRows; j++) {
+		for (int i = 0; i < numOfColumns; i++) {
+			rightImage->at<uchar>(j, i)=(uchar)imArray2D[j][i] ;
+		}
+	}
+	cudaFree(imArray1D_d);
+	imshow(" Left  !!!   .....", *leftImage);
+	imshow("After effect right image !!!   .....", *rightImage);
+	waitKey(10000);
 	cout << int(imArray2D[200][359]) << endl;
 
 	int N = 1 << 2;
