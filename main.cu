@@ -19,6 +19,8 @@
 
 
 #include<cuda.h>
+#include <device_functions.h>
+
 #include<stdio.h>
 #include<iostream> 
 #include<algorithm>
@@ -35,20 +37,54 @@ __global__ void saxpy(int n, float a, float *x, float *y, int* q)
 	if (i < n) y[i] = a*x[i] + y[i];
 }
 
-__global__ void addIntensity(int n, uchar* pixel) {
-	//std::cout << pixel[blockIdx.x] << std::endl;
-	int temp =(int) pixel[blockIdx.x];
-	temp = temp + n;
-
-	pixel[blockIdx.x] = (uchar)temp;
-	//std::cout << pixel[blockIdx.x] << std::endl;
-	//printf("this threadIdx.x is %d and %d \n", blockIdx.x , (pixel[blockIdx.x]));
+__global__ void addIntensity(int n, uchar* pixel)
+{
+	pixel[blockIdx.x] =n+ pixel[blockIdx.x];
 }
 
 
+__global__ void IDAS_Stereo(int kSize, int MxDisparity,int nR,int nC, uchar* leftIm, uchar* rightIm, uchar*resultIm)
+{
+	__shared__ int costs[30];
+	__shared__ bool calcCostes[30] ;
+	__shared__ bool findMin[30];
+	__shared__ int LayerDiff[30*5*5];
+	int rightPixelIndexU = int(kSize / 2) + blockIdx.x + threadIdx.x- int(kSize / 2);
+	int rightPixelIndexV = int(kSize / 2) + blockIdx.y + threadIdx.y - int(kSize / 2);
+	int leftPixelIndexU = rightPixelIndexU +threadIdx.z;
+	int leftPixelIndexV = rightPixelIndexV;
+	int leftPixelIndex = leftPixelIndexV*nC + leftPixelIndexU;
+	int rightPixelIndex = rightPixelIndexV*nC + rightPixelIndexU;
+	int dif =abs( leftIm[leftPixelIndex] - rightIm[rightPixelIndex]);
+	LayerDiff[threadIdx.z*(kSize*kSize) + threadIdx.y * kSize + threadIdx.x]= dif;
+	__syncthreads();
+	if (LayerDiff[threadIdx.z] == false) {
+		costs[threadIdx.z] = 0;
+		LayerDiff[threadIdx.z] = true;
+		for (int i = threadIdx.z*(kSize*kSize); i < (threadIdx.z + 1)*(kSize*kSize); i++) {
+			costs[threadIdx.z] = costs[threadIdx.z] + LayerDiff[i];
+		}
+	}
+	__syncthreads();
+	int min = 10000000;
+	int minIndex = 100;
+	if (findMin[threadIdx.z] == false) {
+		findMin[threadIdx.z] = true;
+		for (int k = 0; k < 30; k++) {
+			if (costs[k] < min) {
+				min = costs[k];
+				minIndex = k;
+			}
+		}
+	}
+
+	
+	resultIm[(blockIdx.y+ int(kSize / 2))* nC +blockIdx.x+ int(kSize / 2)] = uchar(int(minIndex*255/30));
+}
+
 int numOfColumnsResized;
 int numOfRowsResized=0;
-int kernelSize = 9;
+int kernelSize = 5;
 int maxDisparity = 30;
 
 
@@ -130,7 +166,7 @@ int main(void)
 	ReadBothImages(leftImage, rightImage);
 	const int numOfColumns = leftImage->cols;;
 	const int numOfRows = leftImage->rows;
-
+	cout << "numOfRows is " << numOfRows << "and numOfColumns is " << numOfColumns << endl;
 	stereoResut = make_shared<Mat>(numOfRows, numOfColumns, CV_8UC1);
 	//SSDstereo(leftImage, rightImage, stereoResut, kernelSize, maxDisparity, numOfRows, numOfColumns);
 	//cv::imshow("stereoOutput", *stereoResut);
@@ -146,71 +182,60 @@ int main(void)
 	//cv::imshow("gray image", *rightImage);
 	//cv::waitKey(10000);
 
-	dim3 gridSize(numOfColumns, numOfRows);
-	dim3 blockSize(kernelSize, kernelSize, 3);
 
-	uchar** imArray2D= new uchar* [numOfRows];
+
+	uchar** imArray2DL= new uchar* [numOfRows];
+	uchar** imArray2DR = new uchar*[numOfRows];
 	for (int i = 0; i < numOfRows; i++) {
-		imArray2D[i] = new uchar[numOfColumns];
+		imArray2DL[i] = new uchar[numOfColumns];
+		imArray2DR[i] = new uchar[numOfColumns];
 	}
 	for (int j = 0; j < numOfRows; j++) {
 		for (int i = 0; i < numOfColumns; i++) {
-			imArray2D[j][i] = rightImage->at<uchar>(j, i);
+			imArray2DL[j][i] = leftImage->at<uchar>(j, i);
+			imArray2DR[j][i] = rightImage->at<uchar>(j, i);
 		}
 	}
 	cout << "copy to array is done!!!!!!" << endl;
-	cout << int(imArray2D[200][359] )<< endl;
-	cout << rightImage->at<uchar>(200,359) << endl;
-
-	uchar* imArrary1D = new uchar[numOfColumns*numOfRows];
+	uchar* imArrary1DL = new uchar[numOfColumns*numOfRows];
+	uchar* imArrary1DR = new uchar[numOfColumns*numOfRows];
 	int temp;
 	for (int i = 0; i < numOfColumns*numOfRows; i++) {
-		imArrary1D[i] = imArray2D[int(i/numOfColumns)][i%numOfColumns];
-		//cout << (int)imArray2D[int(i / numOfColumns)][i%numOfColumns] << endl;
+		imArrary1DL[i] = imArray2DL[int(i / numOfColumns)][i%numOfColumns];
+		imArrary1DR[i] = imArray2DL[int(i / numOfColumns)][i%numOfColumns];
 	}
 
 
-	uchar* imArray1D_d;
-	cudaMalloc((void**)&imArray1D_d, numOfColumns*numOfRows * sizeof(uchar));
-	cudaMemcpy(imArray1D_d,imArrary1D,numOfColumns*numOfRows*sizeof(uchar), cudaMemcpyHostToDevice);
-	addIntensity <<<(numOfRows*numOfColumns ), 1 >>>(190, imArray1D_d);
-	cudaMemcpy(imArrary1D, imArray1D_d, numOfColumns*numOfRows * sizeof(uchar), cudaMemcpyDeviceToHost);
+	uchar* imArray1DL_d;
+	uchar* imArray1DR_d;
+	uchar* imArray1DResult_d;
+	cudaMalloc((void**)&imArray1DL_d, numOfColumns*numOfRows * sizeof(uchar));
+	cudaMalloc((void**)&imArray1DR_d, numOfColumns*numOfRows * sizeof(uchar));
+	cudaMalloc((void**)&imArray1DResult_d, numOfColumns*numOfRows * sizeof(uchar));
+	cudaMemcpy(imArray1DL_d, imArrary1DL, numOfColumns*numOfRows * sizeof(uchar), cudaMemcpyHostToDevice);
+	cudaMemcpy(imArray1DR_d, imArrary1DR, numOfColumns*numOfRows * sizeof(uchar), cudaMemcpyHostToDevice);
+	dim3 blocks3D(5, 5, 30);
+	dim3 grid2D(numOfColumns-2*int(5/2)-30, numOfRows-2*int(5/2),1);
+	//addIntensity <<<(numOfRows*numOfColumns ), 1 >>>(190, imArray1DL_d);
+	IDAS_Stereo<<<grid2D, blocks3D >>>(5, 30, 480, 640, imArray1DL_d, imArray1DR_d, imArray1DResult_d);
+	cudaMemcpy(imArrary1DL, imArray1DResult_d, numOfColumns*numOfRows * sizeof(uchar), cudaMemcpyDeviceToHost);
 	cout << "adding to array is done!!!!!!" << endl;
 	for (int i = 0; i < numOfColumns*numOfRows; i++) {
-		imArray2D[int(i / numOfColumns)][i%numOfColumns] = imArrary1D[i];
+		imArray2DL[int(i / numOfColumns)][i%numOfColumns] = imArrary1DL[i];
 	}
 
 	for (int j = 0; j < numOfRows; j++) {
 		for (int i = 0; i < numOfColumns; i++) {
-			rightImage->at<uchar>(j, i)=(uchar)imArray2D[j][i] ;
+			leftImage->at<uchar>(j, i)=(uchar)imArray2DL[j][i] ;
 		}
 	}
-	cudaFree(imArray1D_d);
+	cudaFree(imArray1DL_d);
+	cudaFree(imArray1DR_d);
+	cudaFree(imArray1DResult_d);
 	imshow(" Left  !!!   .....", *leftImage);
 	imshow("After effect right image !!!   .....", *rightImage);
 	waitKey(10000);
-	cout << int(imArray2D[200][359]) << endl;
-
-	int N = 1 << 2;
-	float *x, *y, *d_x, *d_y;
-	int *qq;
-	int* qq_d;
-	x = (float*)malloc(N * sizeof(float));
-	y = (float*)malloc(N * sizeof(float));
-	qq = (int*)malloc(N * sizeof(int));
-	cudaMalloc((void **)&d_x, N * sizeof(float));
-	cudaMalloc(&d_y, N * sizeof(float));
-	cudaMalloc(&qq_d, N * sizeof(int));
-
-	for (int i = 0; i < N; i++) {
-		x[i] = 1.0f;
-		y[i] = 2.0f;
-		qq[i] = 4;
-	}
-
-	cudaMemcpy(d_x, x, N * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_y, y, N * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(qq_d, qq, N * sizeof(int), cudaMemcpyHostToDevice);
+	cout << int(imArray2DL[200][359]) << endl;
 
 
 
@@ -219,26 +244,6 @@ int main(void)
 
 
 
-
-	//cuda_hello << < 6, 5 >> > ();
-
-	 //Perform SAXPY on 1M elements
-	saxpy <<<(N + 255) / 256, 256 >>>(N, 2.0f, d_x, d_y, qq_d);
-
-	cudaMemcpy(y, d_y, N * sizeof(float), cudaMemcpyDeviceToHost);
-
-	float maxError = 0.0f;
-	for (int i = 0; i < N; i++)
-		maxError = max(maxError, abs(y[i] - 4.0f));
-	printf("Max error: %f\n", maxError);
-	for (int i = 0; i < N; i++) {
-		cout << y[i] << endl;
-
-	}
-	cudaFree(d_x);
-	cudaFree(d_y);
-	free(x);
-	free(y);
 	printf("Enter your family name: ");
 	char str[80];
 	scanf("%79s", str);
