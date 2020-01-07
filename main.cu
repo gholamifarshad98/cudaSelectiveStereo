@@ -28,19 +28,25 @@ using namespace std;
 using namespace cv;
 int numOfColumnsResized;
 int numOfRowsResized = 0;
-int kernelSize = 4;
-int maxDisparity = 13;
+int kernelSize = 8;
+int maxDisparity = 16;
 
 __global__ void IDAS_Stereo(int kSize, int MxDisparity,int nR,int nC, uchar* leftIm, uchar* rightIm, uchar*resultIm)
 {
-	__shared__ int costs[1];
+	__shared__ int costs[16];
 	__shared__ int minCost;
 	__shared__ int minCostIndex;
 	__shared__ bool minCostGard;
 
-	//costs[blockIdx.z] =0 ;
-	minCost = 1000000000;
-	minCostIndex = 100;
+	//if ((threadIdx.x | threadIdx.y | threadIdx.z) == 0) {
+	//	minCost = 1000000000;
+	//	minCostIndex = 100;
+	//	for (int i = 0; i < blockDim.z; i++) {
+	//		costs[i] = 0;
+	//	}
+	//}
+
+
 	__syncthreads();
 	int rightPixelIndexU = int(kSize / 2) + blockIdx.x + threadIdx.x- int(kSize / 2);
 	int rightPixelIndexV = int(kSize / 2) + blockIdx.y + threadIdx.y - int(kSize / 2);
@@ -48,19 +54,27 @@ __global__ void IDAS_Stereo(int kSize, int MxDisparity,int nR,int nC, uchar* lef
 	int leftPixelIndexV = rightPixelIndexV;
 	int leftPixelIndex = leftPixelIndexV*nC + leftPixelIndexU;
 	int rightPixelIndex = rightPixelIndexV*nC + rightPixelIndexU;
-	/*int dif =abs( leftIm[leftPixelIndex] - rightIm[rightPixelIndex]);
-	costs[blockIdx.z] = costs[blockIdx.z] + dif;
-
-	__syncthreads();
-	if (costs[blockIdx.z] < minCost) {
-		minCost = costs[blockIdx.z];
-		minCostIndex = blockIdx.z;
-	}
-	__syncthreads();*/
-
-	resultIm[(blockIdx.y + int(kSize / 2))* nC + blockIdx.x + int(kSize / 2)] = leftIm[rightPixelIndex];// uchar(int(minCostIndex * 255 / 10));
+	int dif =abs( leftIm[leftPixelIndex] - rightIm[rightPixelIndex]);
 	
-	//__syncthreads();
+	
+	
+	costs[threadIdx.z] = costs[threadIdx.z] + dif;
+	__syncthreads();
+	minCost = 1000000000;
+	if ((threadIdx.x | threadIdx.y | threadIdx.z) == 0) {
+		for (int i = 0; i < blockDim.z; i++) {
+			if (costs[i] < minCost) {
+				minCost = costs[i];
+				minCostIndex = i;
+				printf("(%i ,%i )===> %i \n", blockIdx.x, blockIdx.y, i);
+			}
+		}
+	}
+	__syncthreads();
+	//printf("%i\n", int(minCostIndex * 255 / 20));
+	resultIm[(blockIdx.y + int(kSize / 2))* nC + blockIdx.x + int(kSize / 2)] = uchar(int(minCostIndex * 255 / 16));
+	
+	__syncthreads();
 }
 
 
