@@ -31,15 +31,18 @@ int numOfColumnsResized;
 int numOfRowsResized = 0;
 int kernelSize = 12;
 int maxDisparity = 30;
-int selectedDisparity =0;
-
+int selectedDisparity =10;
 
 
 __global__ void IDAS_Stereo_selective(int kSize, int MxDisparity, int nC , int nSelected, uchar* leftIm, uchar* rightIm, bool* resultIm)
 {
 	//thread_group my_block = this_thread_block();
 	//thread_block block = this_thread_block();
-	__shared__ int costs[6];
+	__shared__   int costs[6];
+	__shared__   int dif[6 * 12 * 12];
+
+
+
 	int rightPixelIndexU;
 	int rightPixelIndexV;
 
@@ -48,7 +51,7 @@ __global__ void IDAS_Stereo_selective(int kSize, int MxDisparity, int nC , int n
 
 	int leftPixelIndex;
 	int rightPixelIndex;
-	int dif;
+
 
 	if (threadIdx.z<3) {
 		rightPixelIndexU = blockIdx.x + threadIdx.x + MxDisparity + 1;
@@ -57,8 +60,10 @@ __global__ void IDAS_Stereo_selective(int kSize, int MxDisparity, int nC , int n
 		leftPixelIndexV = rightPixelIndexV;
 		leftPixelIndex = leftPixelIndexV*nC + leftPixelIndexU;
 		rightPixelIndex = rightPixelIndexV*nC + rightPixelIndexU;
-		dif = abs(leftIm[leftPixelIndex] - rightIm[rightPixelIndex]);
-		costs[threadIdx.z] = costs[threadIdx.z] + dif;
+		dif[threadIdx.x+threadIdx.y*12+threadIdx.z*(144)] = abs(leftIm[leftPixelIndex] - rightIm[rightPixelIndex]);
+
+		//costs[threadIdx.z] = costs[threadIdx.z] + dif[threadIdx.x + threadIdx.y * 12 + threadIdx.z * (144)];
+
 	}
 	else {
 		rightPixelIndexU = blockIdx.x + threadIdx.x + MxDisparity + 1-(threadIdx.z-4)- nSelected;
@@ -67,21 +72,34 @@ __global__ void IDAS_Stereo_selective(int kSize, int MxDisparity, int nC , int n
 		leftPixelIndexV = rightPixelIndexV;
 		leftPixelIndex = leftPixelIndexV*nC + leftPixelIndexU;
 		rightPixelIndex = rightPixelIndexV*nC + rightPixelIndexU;
-		dif = abs(leftIm[leftPixelIndex] - rightIm[rightPixelIndex]);
-		costs[threadIdx.z] = costs[threadIdx.z] + dif;
+		dif[threadIdx.x + threadIdx.y * 12 + threadIdx.z * (144)] = abs(leftIm[leftPixelIndex] - rightIm[rightPixelIndex]);
+		//costs[threadIdx.z] = costs[threadIdx.z] + dif[threadIdx.x + threadIdx.y * 12 + threadIdx.z * (144)];
 	}
-	__syncthreads();
-	
+	__syncthreads();
+
+
+	if (threadIdx.x == 0 & threadIdx.y == 0) {
+		costs[threadIdx.z] = 0;
+		for (int i = 0; i < 12;i++) {
+			for(int j=0;j<12;j++)
+			costs[threadIdx.z] = costs[threadIdx.z] + dif[i + j* 12 + threadIdx.z * (144)];
+		}
+	}
+
+	__syncthreads();
+
 	if (threadIdx.x==0 & threadIdx.y==0 & threadIdx.z == 0) {
 		bool isMinCenter_R_ref = false;
 		bool isMinCenter_L_ref = false;
 		if (costs[1] < costs[0] & costs[1] < costs[2]) { isMinCenter_R_ref = true; }
 		if (costs[4] < costs[3] & costs[4] < costs[5]) { isMinCenter_L_ref = true; }
 		if(isMinCenter_R_ref & isMinCenter_L_ref){
+			
 			resultIm[(blockIdx.y + int(kSize / 2))* nC + (blockIdx.x + MxDisparity+ int(kSize / 2)+2)] = true;
 		}
 	}
 	__syncthreads();
+	//cudaDeviceSynchronize();
 	//printf("%i\n", int(minCostIndex * 255 / 20));
 }
 
@@ -92,9 +110,9 @@ void ReadBothImages(shared_ptr<Mat> leftImage, shared_ptr<Mat> rightImage) {
 
 	try {
 		cout << "this is test" << endl;
-		*rightImage = cv::imread("1.png", CV_LOAD_IMAGE_GRAYSCALE);   // Read the right image
+		*rightImage = cv::imread("1.png", IMREAD_GRAYSCALE);   // Read the right image
 																  //rightImage->convertTo(*rightImage, CV_64F);
-		*leftImage = cv::imread("2.png", CV_LOAD_IMAGE_GRAYSCALE);   // Read the left image
+		*leftImage = cv::imread("2.png", IMREAD_GRAYSCALE);   // Read the left image
 																 //leftImage->convertTo(*leftImage, CV_64F);
 	}
 	catch (char* error) {
@@ -223,6 +241,7 @@ int main(void)
 	dim3 grid2D(numOfColumns-2*(maxDisparity+1)-(kernelSize-1), numOfRows-kernelSize-1,1);
 	//addIntensity <<<(numOfRows*numOfColumns ), 1 >>>(190, imArray1DL_d);
 	IDAS_Stereo_selective <<<grid2D, blocks3D >>>(kernelSize, maxDisparity, numOfColumns, selectedDisparity , imArray1DL_d, imArray1DR_d, imArray1DResult_d);
+	cudaDeviceSynchronize();
 	cudaMemcpy(imArrary1DR_result, imArray1DResult_d, numOfColumns*numOfRows * sizeof(bool), cudaMemcpyDeviceToHost);
 	cout << "adding to array is done!!!!!!" << endl;
 	for (int i = 0; i < numOfColumns*numOfRows; i++) {
