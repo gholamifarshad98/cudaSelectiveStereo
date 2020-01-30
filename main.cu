@@ -31,7 +31,7 @@ int numOfColumnsResized;
 int numOfRowsResized = 0;
 int kernelSize = 12;
 int maxDisparity = 30;
-int selectedDisparity =10;
+int selectedDisparity =5;
 
 
 __global__ void IDAS_Stereo_selective(int kSize, int MxDisparity, int nC , int nSelected, uchar* leftIm, uchar* rightIm, bool* resultIm)
@@ -41,7 +41,7 @@ __global__ void IDAS_Stereo_selective(int kSize, int MxDisparity, int nC , int n
 	__shared__   int costs[6];
 	__shared__   int dif[6 * 12 * 12];
 
-
+	
 
 	int rightPixelIndexU;
 	int rightPixelIndexV;
@@ -52,11 +52,12 @@ __global__ void IDAS_Stereo_selective(int kSize, int MxDisparity, int nC , int n
 	int leftPixelIndex;
 	int rightPixelIndex;
 
-
+	
 	if (threadIdx.z<3) {
+		//printf("the selected disparity i %d \n  ", nSelected);
 		rightPixelIndexU = blockIdx.x + threadIdx.x + MxDisparity + 1;
 		rightPixelIndexV = blockIdx.y + threadIdx.y;
-		leftPixelIndexU = rightPixelIndexU + threadIdx.z+MxDisparity+1+(threadIdx.z-1)+nSelected;
+		leftPixelIndexU = rightPixelIndexU + (threadIdx.z-1)+nSelected;
 		leftPixelIndexV = rightPixelIndexV;
 		leftPixelIndex = leftPixelIndexV*nC + leftPixelIndexU;
 		rightPixelIndex = rightPixelIndexV*nC + rightPixelIndexU;
@@ -66,9 +67,9 @@ __global__ void IDAS_Stereo_selective(int kSize, int MxDisparity, int nC , int n
 
 	}
 	else {
-		rightPixelIndexU = blockIdx.x + threadIdx.x + MxDisparity + 1-(threadIdx.z-4)- nSelected;
+		rightPixelIndexU = blockIdx.x + threadIdx.x + MxDisparity + 1 + (threadIdx.z - 4);
 		rightPixelIndexV = blockIdx.y + threadIdx.y;
-		leftPixelIndexU = rightPixelIndexU + threadIdx.z + MxDisparity + 1;
+		leftPixelIndexU = blockIdx.x + threadIdx.x + MxDisparity + 1+ nSelected;
 		leftPixelIndexV = rightPixelIndexV;
 		leftPixelIndex = leftPixelIndexV*nC + leftPixelIndexU;
 		rightPixelIndex = rightPixelIndexV*nC + rightPixelIndexU;
@@ -110,17 +111,20 @@ void ReadBothImages(shared_ptr<Mat> leftImage, shared_ptr<Mat> rightImage) {
 
 	try {
 		cout << "this is test" << endl;
-		*rightImage = cv::imread("1.png", IMREAD_GRAYSCALE);   // Read the right image
+		*rightImage = cv::imread("2.png", IMREAD_GRAYSCALE);   // Read the right image
 																  //rightImage->convertTo(*rightImage, CV_64F);
-		*leftImage = cv::imread("2.png", IMREAD_GRAYSCALE);   // Read the left image
+		*leftImage = cv::imread("1.png", IMREAD_GRAYSCALE);   // Read the left image
 																 //leftImage->convertTo(*leftImage, CV_64F);
 	}
 	catch (char* error) {
 		cout << "can not load the " << error << " iamge" << endl;
 	}
 
-	
+	cv::resize(*rightImage, *rightImage, cv::Size(), 0.50, 0.50);
+	cv::resize(*leftImage, *leftImage, cv::Size(), 0.50, 0.50);
+
 	//imshow("test", *rightImage);
+
 
 	//waitKey(5000);
 }
@@ -224,7 +228,7 @@ int main(void)
 	int temp;
 	for (int i = 0; i < numOfColumns*numOfRows; i++) {
 		imArrary1DL[i] = imArray2DL[int(i / numOfColumns)][i%numOfColumns];
-		imArrary1DR[i] = imArray2DL[int(i / numOfColumns)][i%numOfColumns];
+		imArrary1DR[i] = imArray2DR[int(i / numOfColumns)][i%numOfColumns];
 		imArrary1DR_result[i]= imArrary2DR_result[int(i / numOfColumns)][i%numOfColumns];
 	}
 
@@ -240,7 +244,7 @@ int main(void)
 	dim3 blocks3D(kernelSize, kernelSize,6);
 	dim3 grid2D(numOfColumns-2*(maxDisparity+1)-(kernelSize-1), numOfRows-kernelSize-1,1);
 	//addIntensity <<<(numOfRows*numOfColumns ), 1 >>>(190, imArray1DL_d);
-	IDAS_Stereo_selective <<<grid2D, blocks3D >>>(kernelSize, maxDisparity, numOfColumns, selectedDisparity , imArray1DL_d, imArray1DR_d, imArray1DResult_d);
+	IDAS_Stereo_selective <<<grid2D, blocks3D >>>(kernelSize, maxDisparity, numOfColumns, selectedDisparity, imArray1DL_d, imArray1DR_d, imArray1DResult_d);
 	cudaDeviceSynchronize();
 	cudaMemcpy(imArrary1DR_result, imArray1DResult_d, numOfColumns*numOfRows * sizeof(bool), cudaMemcpyDeviceToHost);
 	cout << "adding to array is done!!!!!!" << endl;
@@ -271,7 +275,7 @@ int main(void)
 
 
 
-	printf("Enter your family name: ");
+	printf("\n \n \n  \t \t \t :)  ");
 	char str[80];
 	scanf("%79s", str);
 }
