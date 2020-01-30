@@ -22,6 +22,9 @@
 #include<cuda.h>
 #include <device_functions.h>
 
+
+#include <time.h>
+
 #include<stdio.h>
 #include<iostream> 
 #include<algorithm>
@@ -120,8 +123,8 @@ void ReadBothImages(shared_ptr<Mat> leftImage, shared_ptr<Mat> rightImage) {
 		cout << "can not load the " << error << " iamge" << endl;
 	}
 
-	cv::resize(*rightImage, *rightImage, cv::Size(), 0.50, 0.50);
-	cv::resize(*leftImage, *leftImage, cv::Size(), 0.50, 0.50);
+	//cv::resize(*rightImage, *rightImage, cv::Size(), 0.50, 0.50);
+	//cv::resize(*leftImage, *leftImage, cv::Size(), 0.50, 0.50);
 
 	//imshow("test", *rightImage);
 
@@ -193,10 +196,7 @@ int main(void)
 	//SSDstereo(leftImage, rightImage, stereoResut, kernelSize, maxDisparity, numOfRows, numOfColumns);
 	//cv::imshow("stereoOutput", *stereoResut);
 	//cv::waitKey(1000);
-	chrono::high_resolution_clock::time_point stop = chrono::high_resolution_clock::now();
-	auto duration =(stop - start);
-	auto value = duration.count();
-	string duration_s = to_string(value);
+
 	//ofstream repotredResult;
 
 	//shared_ptr<Mat> rightGrayImage = make_shared<Mat>(numOfRows, numOfColumns, CV_8UC1);
@@ -258,9 +258,16 @@ int main(void)
 			leftImage->at<uchar>(j, i)=(uchar)255 ;
 		}
 	}
+	
 	cudaFree(imArray1DL_d);
 	cudaFree(imArray1DR_d);
 	cudaFree(imArray1DResult_d);
+	chrono::high_resolution_clock::time_point stop = chrono::high_resolution_clock::now();
+
+	std::chrono::duration<double, std::milli> duration = (stop - start);;
+	auto value = duration.count();
+	string duration_s = to_string(value);
+	cout << "time of run is " << value << endl;
 	imshow(" Left  !!!   .....", *leftImage);
 	imwrite("test.png", *leftImage);
 	imshow("After effect right image !!!   .....", *rightImage);
