@@ -32,18 +32,18 @@ using namespace std;
 using namespace cv;
 int numOfColumnsResized;
 int numOfRowsResized = 0;
-int kernelSize = 12;
+int kernelSize = 16;
 int maxDisparity = 30;
 int selectedDisparity =5;
 
 
-__global__ void IDAS_Stereo_selective(int kSize, int MxDisparity, int nC , int nSelected, uchar* leftIm, uchar* rightIm, bool* resultIm)
+__global__ void IDAS_Stereo_selective( int MxDisparity, int nC , int nSelected, uchar* leftIm, uchar* rightIm, int* resultIm)
 {
 	//thread_group my_block = this_thread_block();
 	//thread_block block = this_thread_block();
-	__shared__   int costs[6];
-	__shared__   int dif[6 * 12 * 12];
-
+	__shared__   int costs;
+	__shared__   int dif[16 * 16];
+	int kSize = 16;
 	
 
 	int rightPixelIndexU;
@@ -55,56 +55,30 @@ __global__ void IDAS_Stereo_selective(int kSize, int MxDisparity, int nC , int n
 	int leftPixelIndex;
 	int rightPixelIndex;
 
+	rightPixelIndexU = blockIdx.x + threadIdx.x + MxDisparity + 1;
+	rightPixelIndexV = blockIdx.y + threadIdx.y;
+	leftPixelIndexU = rightPixelIndexU + (blockIdx.z - 1) + nSelected;
+	leftPixelIndexV = rightPixelIndexV;
+	leftPixelIndex = leftPixelIndexV * nC + leftPixelIndexU;
+	rightPixelIndex = rightPixelIndexV * nC + rightPixelIndexU;
+	dif[threadIdx.x + threadIdx.y * kSize] = abs(leftIm[leftPixelIndex] - rightIm[rightPixelIndex]);
+	__syncthreads();
+
 	
-	if (threadIdx.z<3) {
-		//printf("the selected disparity i %d \n  ", nSelected);
-		rightPixelIndexU = blockIdx.x + threadIdx.x + MxDisparity + 1;
-		rightPixelIndexV = blockIdx.y + threadIdx.y;
-		leftPixelIndexU = rightPixelIndexU + (threadIdx.z-1)+nSelected;
-		leftPixelIndexV = rightPixelIndexV;
-		leftPixelIndex = leftPixelIndexV*nC + leftPixelIndexU;
-		rightPixelIndex = rightPixelIndexV*nC + rightPixelIndexU;
-		dif[threadIdx.x+threadIdx.y*12+threadIdx.z*(144)] = abs(leftIm[leftPixelIndex] - rightIm[rightPixelIndex]);
-
-		//costs[threadIdx.z] = costs[threadIdx.z] + dif[threadIdx.x + threadIdx.y * 12 + threadIdx.z * (144)];
-
-	}
-	else {
-		rightPixelIndexU = blockIdx.x + threadIdx.x + MxDisparity + 1 + (threadIdx.z - 4);
-		rightPixelIndexV = blockIdx.y + threadIdx.y;
-		leftPixelIndexU = blockIdx.x + threadIdx.x + MxDisparity + 1+ nSelected;
-		leftPixelIndexV = rightPixelIndexV;
-		leftPixelIndex = leftPixelIndexV*nC + leftPixelIndexU;
-		rightPixelIndex = rightPixelIndexV*nC + rightPixelIndexU;
-		dif[threadIdx.x + threadIdx.y * 12 + threadIdx.z * (144)] = abs(leftIm[leftPixelIndex] - rightIm[rightPixelIndex]);
-		//costs[threadIdx.z] = costs[threadIdx.z] + dif[threadIdx.x + threadIdx.y * 12 + threadIdx.z * (144)];
-	}
-	__syncthreads();
-
-
 	if (threadIdx.x == 0 & threadIdx.y == 0) {
-		costs[threadIdx.z] = 0;
-		for (int i = 0; i < 12;i++) {
-			for(int j=0;j<12;j++)
-			costs[threadIdx.z] = costs[threadIdx.z] + dif[i + j* 12 + threadIdx.z * (144)];
+		costs = 0;
+		for (int i = 0; i < blockDim.y;i++) {
+			for(int j=0;j< blockDim.x;j++)
+			costs = costs + dif[i + j* kSize];
 		}
+		//printf("%d \n", costs);
 	}
 
 	__syncthreads();
 
-	if (threadIdx.x==0 & threadIdx.y==0 & threadIdx.z == 0) {
-		bool isMinCenter_R_ref = false;
-		bool isMinCenter_L_ref = false;
-		if (costs[1] < costs[0] & costs[1] < costs[2]) { isMinCenter_R_ref = true; }
-		if (costs[4] < costs[3] & costs[4] < costs[5]) { isMinCenter_L_ref = true; }
-		if(isMinCenter_R_ref & isMinCenter_L_ref){
 			
-			resultIm[(blockIdx.y + int(kSize / 2))* nC + (blockIdx.x + MxDisparity+ int(kSize / 2)+2)] = true;
-		}
-	}
-	__syncthreads();
-	//cudaDeviceSynchronize();
-	//printf("%i\n", int(minCostIndex * 255 / 20));
+	resultIm[((blockIdx.y + int(kSize / 2))* nC + (blockIdx.x + MxDisparity+ int(kSize / 2)+2))*3+ blockIdx.z] = costs;
+	
 }
 
 
@@ -187,8 +161,9 @@ int main(void)
 	shared_ptr<Mat>  stereoResut = make_shared<Mat>();
 	shared_ptr<Mat>  stereoResutResized = make_shared<Mat>();
 
-	auto start = chrono::high_resolution_clock::now();
+//	auto start = chrono::high_resolution_clock::now();
 	ReadBothImages(leftImage, rightImage);
+	//chrono::high_resolution_clock::time_point stop = chrono::high_resolution_clock::now();
 	const int numOfColumns = ((int)leftImage->cols/32)*32;
 	const int numOfRows = ((int)leftImage->rows/32)*32;
 	cout << "numOfRows is " << numOfRows << " and numOfColumns is " << numOfColumns << endl;
@@ -208,53 +183,69 @@ int main(void)
 
 	uchar** imArray2DL= new uchar* [numOfRows];
 	uchar** imArray2DR = new uchar*[numOfRows];
-	bool** imArrary2DR_result= new bool*[numOfRows];
+	int** imArrary2DR_result= new int*[numOfRows];
 	for (int i = 0; i < numOfRows; i++) {
 		imArray2DL[i] = new uchar[numOfColumns];
 		imArray2DR[i] = new uchar[numOfColumns];
-		imArrary2DR_result[i] = new bool[numOfColumns];
+		imArrary2DR_result[i] = new int[numOfColumns*3];
 	}
+	uchar* imArrary1DL = new uchar[numOfColumns * numOfRows];
+	uchar* imArrary1DR = new uchar[numOfColumns * numOfRows];
+	int* imArrary1DR_result = new int[numOfColumns * numOfRows * 3];
+	int temp;
+	//auto start = chrono::high_resolution_clock::now();
 	for (int j = 0; j < numOfRows; j++) {
 		for (int i = 0; i < numOfColumns; i++) {
 			imArray2DL[j][i] = leftImage->at<uchar>(j, i);
 			imArray2DR[j][i] = rightImage->at<uchar>(j, i);
-			imArrary2DR_result[j][i] = false;
 		}
 	}
-	cout << "copy to array is done!!!!!!" << endl;
-	uchar* imArrary1DL = new uchar[numOfColumns*numOfRows];
-	uchar* imArrary1DR = new uchar[numOfColumns*numOfRows];
-	bool* imArrary1DR_result = new bool[numOfColumns*numOfRows];
-	int temp;
+	//cout << "copy to array is done!!!!!!" << endl;
+
 	for (int i = 0; i < numOfColumns*numOfRows; i++) {
 		imArrary1DL[i] = imArray2DL[int(i / numOfColumns)][i%numOfColumns];
 		imArrary1DR[i] = imArray2DR[int(i / numOfColumns)][i%numOfColumns];
-		imArrary1DR_result[i]= imArrary2DR_result[int(i / numOfColumns)][i%numOfColumns];
+		for(int k=0;k<3;k++){
+			imArrary1DR_result[i + i*k] = 0;
+		}
 	}
+	//chrono::high_resolution_clock::time_point stop = chrono::high_resolution_clock::now();
+
 
 
 	uchar* imArray1DL_d;
 	uchar* imArray1DR_d;
-	bool* imArray1DResult_d;
+	int* imArray1DResult_d;
+
+	
 	cudaMalloc((void**)&imArray1DL_d, numOfColumns*numOfRows * sizeof(uchar));
 	cudaMalloc((void**)&imArray1DR_d, numOfColumns*numOfRows * sizeof(uchar));
-	cudaMalloc((void**)&imArray1DResult_d, numOfColumns*numOfRows * sizeof(bool));
+	cudaMalloc((void**)&imArray1DResult_d, numOfColumns*numOfRows*3 * sizeof(int));
+	auto start = chrono::high_resolution_clock::now();
 	cudaMemcpy(imArray1DL_d, imArrary1DL, numOfColumns*numOfRows * sizeof(uchar), cudaMemcpyHostToDevice);
 	cudaMemcpy(imArray1DR_d, imArrary1DR, numOfColumns*numOfRows * sizeof(uchar), cudaMemcpyHostToDevice);
-	dim3 blocks3D(kernelSize, kernelSize,6);
-	dim3 grid2D(numOfColumns-2*(maxDisparity+1)-(kernelSize-1), numOfRows-kernelSize-1,1);
+	dim3 blocks3D(16, 16,1);
+	dim3 grid2D(numOfColumns-2*(maxDisparity+1)-(kernelSize-1), numOfRows-kernelSize-1,3);
 	//addIntensity <<<(numOfRows*numOfColumns ), 1 >>>(190, imArray1DL_d);
-	IDAS_Stereo_selective <<<grid2D, blocks3D >>>(kernelSize, maxDisparity, numOfColumns, selectedDisparity, imArray1DL_d, imArray1DR_d, imArray1DResult_d);
-	cudaDeviceSynchronize();
-	cudaMemcpy(imArrary1DR_result, imArray1DResult_d, numOfColumns*numOfRows * sizeof(bool), cudaMemcpyDeviceToHost);
-	cout << "adding to array is done!!!!!!" << endl;
-	for (int i = 0; i < numOfColumns*numOfRows; i++) {
+	IDAS_Stereo_selective <<<grid2D, blocks3D >>>(maxDisparity, numOfColumns, selectedDisparity, imArray1DL_d, imArray1DR_d, imArray1DResult_d);
+	//cudaDeviceSynchronize();
+	cudaMemcpy(imArrary1DR_result, imArray1DResult_d, numOfColumns*numOfRows *3* sizeof(int), cudaMemcpyDeviceToHost);
+	//cout << "adding to array is done!!!!!!" << endl;
+	/*for (int i = 0; i < numOfColumns*numOfRows; i++) {
 		imArrary2DR_result[int(i / numOfColumns)][i%numOfColumns] = imArrary1DR_result[i];
-	}
+	}*/
+	int firstCost;
+	int secondCost;
+	int thirdCost;
+
 
 	for (int j = 0; j < numOfRows; j++) {
 		for (int i = 0; i < numOfColumns; i++) {
-				if(imArrary2DR_result[j][i]==true)
+			firstCost = imArrary1DR_result[(j * numOfColumns + i)*3];
+			secondCost= imArrary1DR_result[(j * numOfColumns + i)*3+1];
+			thirdCost= imArrary1DR_result[(j * numOfColumns + i )* 3+2];
+			//cout << "(" << firstCost << "," << secondCost << "," << thirdCost << ")" << endl;
+			if(secondCost<firstCost& secondCost<thirdCost)//(imArrary2DR_result[j][i]==true)
 			leftImage->at<uchar>(j, i)=(uchar)255 ;
 		}
 	}
